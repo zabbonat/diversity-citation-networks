@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JEL Code Network | Rao-Stirling Visualization</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background-color: #0d1117;
+      color: #e6edf3;
+      overflow: hidden;
+    }
+    .app { display: flex; height: 100vh; width: 100vw; }
+    
+    /* Filter Panel */
+    .filter-panel {
+      width: 280px;
+      min-width: 280px;
+      background-color: #161b22;
+      border-right: 1px solid #30363d;
+      padding: 20px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .stats-box {
+      display: flex;
+      gap: 20px;
+      padding: 15px;
+      background-color: #21262d;
+      border-radius: 8px;
+      border: 1px solid #30363d;
+    }
+    .stat { display: flex; flex-direction: column; }
+    .stat-label {
+      font-size: 12px;
+      color: #8b949e;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .stat-value {
+      font-size: 28px;
+      font-weight: bold;
+      color: #58a6ff;
+    }
+    .export-btn {
+      width: 100%;
+      padding: 12px 20px;
+      background-color: #238636;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    .export-btn:hover { background-color: #2ea043; }
+    .filter-section {
+      background-color: #21262d;
+      border-radius: 8px;
+      padding: 15px;
+      border: 1px solid #30363d;
+    }
+    .filter-section h3 {
+      font-size: 12px;
+      color: #8b949e;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 15px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #30363d;
+    }
+    .filter-group { margin-bottom: 18px; }
+    .filter-group:last-child { margin-bottom: 0; }
+    .filter-group > label {
+      display: block;
+      font-size: 13px;
+      color: #e6edf3;
+      margin-bottom: 8px;
+      font-weight: 500;
+    }
+    .checkbox-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+      padding: 6px 8px;
+      border-radius: 4px;
+      transition: background-color 0.2s;
+    }
+    .checkbox-item:hover { background-color: #30363d; }
+    .checkbox-item input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      accent-color: #58a6ff;
+      cursor: pointer;
+    }
+    .checkbox-item label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      font-size: 13px;
+      color: #c9d1d9;
+    }
+    .color-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .color-dot.theoretical { background-color: #ef5350; }
+    .color-dot.methodological { background-color: #42a5f5; }
+    .color-dot.cross { background-color: #66bb6a; }
+    .year-range { display: flex; align-items: center; gap: 10px; }
+    .year-range input[type="number"] {
+      width: 80px;
+      padding: 8px 10px;
+      background-color: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      color: #e6edf3;
+      font-size: 14px;
+    }
+    .year-range input[type="number"]:focus {
+      outline: none;
+      border-color: #58a6ff;
+    }
+    .year-range span { color: #8b949e; }
+    input[type="range"] {
+      width: 100%;
+      height: 6px;
+      background: #30363d;
+      border-radius: 3px;
+      appearance: none;
+      cursor: pointer;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      background: #58a6ff;
+      border-radius: 50%;
+      cursor: pointer;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 0;
+      font-size: 12px;
+      color: #c9d1d9;
+    }
+    .legend-note {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #30363d;
+      font-size: 11px;
+      color: #8b949e;
+      line-height: 1.6;
+    }
+    
+    /* Main Content */
+    .main-content {
+      flex: 1;
+      position: relative;
+      background-color: #0d1117;
+      background-image: 
+        radial-gradient(circle at 20% 80%, rgba(88, 166, 255, 0.03) 0%, transparent 50%),
+        radial-gradient(circle at 80% 20%, rgba(239, 83, 80, 0.03) 0%, transparent 50%);
+    }
+    #network-svg {
+      width: 100%;
+      height: 100%;
+      cursor: grab;
+    }
+    #network-svg:active { cursor: grabbing; }
+    
+    /* Upload Prompt */
+    .upload-prompt {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      padding: 40px;
+      background-color: #161b22;
+      border: 2px dashed #30363d;
+      border-radius: 12px;
+      max-width: 500px;
+    }
+    .upload-prompt h2 {
+      font-size: 24px;
+      margin-bottom: 15px;
+      color: #e6edf3;
+    }
+    .upload-prompt p {
+      color: #8b949e;
+      margin-bottom: 10px;
+      font-size: 14px;
+    }
+    .upload-prompt .required-cols {
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 11px;
+      color: #58a6ff;
+      background-color: #0d1117;
+      padding: 12px;
+      border-radius: 6px;
+      margin: 15px 0;
+    }
+    .file-input {
+      margin-top: 20px;
+    }
+    .file-input::file-selector-button {
+      padding: 10px 20px;
+      background-color: #238636;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      margin-right: 10px;
+    }
+    .file-input::file-selector-button:hover {
+      background-color: #2ea043;
+    }
+    
+    /* Tooltip */
+    .tooltip {
+      position: fixed;
+      background-color: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 12px 15px;
+      pointer-events: none;
+      z-index: 1000;
+      min-width: 180px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+      display: none;
+    }
+    .tooltip.visible { display: block; }
+    .tooltip-header {
+      font-size: 16px;
+      font-weight: bold;
+      color: #e6edf3;
+      margin-bottom: 10px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #30363d;
+    }
+    .tooltip-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 0;
+      font-size: 12px;
+    }
+    .tooltip-row span:first-child { color: #8b949e; }
+    .tooltip-row span:last-child { color: #e6edf3; font-weight: 500; }
+    .tooltip-row .theoretical { color: #ef5350; }
+    .tooltip-row .methodological { color: #42a5f5; }
+    .tooltip-row .cross { color: #66bb6a; }
+    
+    /* Links and Nodes */
+    .links line { stroke-linecap: round; }
+    .nodes .node { cursor: pointer; }
+    .nodes .node text {
+      text-shadow: 0 0 3px #0d1117, 0 0 5px #0d1117, 1px 1px 2px #0d1117;
+    }
+    
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: #0d1117; }
+    ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #484f58; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="filter-panel">
+      <div class="stats-box">
+        <div class="stat">
+          <span class="stat-label">Nodes</span>
+          <span class="stat-value" id="node-count">0</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Edges</span>
+          <span class="stat-value" id="edge-count">0</span>
+        </div>
+      </div>
+
+      <button class="export-btn" onclick="exportCSV()">↓ Download CSV</button>
+
+      <div class="filter-section">
+        <h3>⚙ FILTERS</h3>
+        
+        <div class="filter-group">
+          <label>Component Types</label>
+          <div class="checkbox-item">
+            <input type="checkbox" id="cb-theoretical" checked onchange="updateNetwork()">
+            <label for="cb-theoretical">
+              <span class="color-dot theoretical"></span>Theoretical
+            </label>
+          </div>
+          <div class="checkbox-item">
+            <input type="checkbox" id="cb-methodological" checked onchange="updateNetwork()">
+            <label for="cb-methodological">
+              <span class="color-dot methodological"></span>Methodological
+            </label>
+          </div>
+          <div class="checkbox-item">
+            <input type="checkbox" id="cb-cross" checked onchange="updateNetwork()">
+            <label for="cb-cross">
+              <span class="color-dot cross"></span>Cross-domain
+            </label>
+          </div>
+        </div>
+
+        <div class="filter-group">
+          <label>Year Range</label>
+          <div class="year-range">
+            <input type="number" id="year-min" value="2000" min="1990" max="2030" onchange="updateNetwork()">
+            <span>-</span>
+            <input type="number" id="year-max" value="2025" min="1990" max="2030" onchange="updateNetwork()">
+          </div>
+        </div>
+
+        <div class="filter-group">
+          <label>Min Rao-Stirling: <span id="min-rs-label">0.00</span></label>
+          <input type="range" id="min-rs" min="0" max="0.8" step="0.01" value="0" onchange="updateNetwork(); document.getElementById('min-rs-label').textContent = this.value;">
+        </div>
+
+        <div class="filter-group">
+          <label>Top N Combinations: <span id="top-n-label">50</span></label>
+          <input type="range" id="top-n" min="10" max="200" step="10" value="50" onchange="updateNetwork(); document.getElementById('top-n-label').textContent = this.value;">
+        </div>
+      </div>
+
+      <div class="filter-section">
+        <h3>LEGEND</h3>
+        <div class="legend-item">
+          <span class="color-dot theoretical"></span>
+          <span>Theoretical (JEL topics)</span>
+        </div>
+        <div class="legend-item">
+          <span class="color-dot methodological"></span>
+          <span>Methodological (JEL methods)</span>
+        </div>
+        <div class="legend-item">
+          <span class="color-dot cross"></span>
+          <span>Cross-domain links</span>
+        </div>
+        <div class="legend-note">
+          Node size = frequency of appearance<br>
+          Edge thickness = cumulative RS value
+        </div>
+      </div>
+    </div>
+    
+    <div class="main-content">
+      <div class="upload-prompt" id="upload-prompt">
+        <h2>JEL Code Network Visualization</h2>
+        <p>Upload your Rao-Stirling data file (TSV/CSV format)</p>
+        <p class="required-cols">
+          Required columns: theoretical, methodological, cross,<br>
+          rao_stirling_theoretical, rao_stirling_methodological,<br>
+          rao_stirling_cross, publication_year
+        </p>
+        <input type="file" accept=".csv,.tsv,.txt" class="file-input" onchange="handleFileUpload(event)">
+      </div>
+      <svg id="network-svg"></svg>
+    </div>
+  </div>
+
+  <div class="tooltip" id="tooltip">
+    <div class="tooltip-header" id="tooltip-header"></div>
+    <div class="tooltip-row"><span>Category:</span><span id="tooltip-category"></span></div>
+    <div class="tooltip-row"><span>Appearances:</span><span id="tooltip-count"></span></div>
+    <div class="tooltip-row"><span>Avg RS Value:</span><span id="tooltip-avg-rs"></span></div>
+    <div class="tooltip-row"><span>Total RS:</span><span id="tooltip-total-rs"></span></div>
+    <div class="tooltip-row"><span>Years:</span><span id="tooltip-years"></span></div>
+  </div>
+
+  <script>
+    // Global state
+    let rawData = [];
+    let currentNetwork = { nodes: [], edges: [] };
+    let simulation = null;
+
+    // Parse list strings from the data
+    function parseListString(str) {
+      if (!str || str === '[]') return [];
+      try {
+        const cleaned = str.replace(/\(/g, '[').replace(/\)/g, ']').replace(/'/g, '"');
+        return JSON.parse(cleaned);
+      } catch (e) {
+        return [];
+      }
+    }
+
+    // Process uploaded data
+    function processData(text) {
+      const rows = text.trim().split('\n');
+      const headers = rows[0].split('\t');
+      
+      return rows.slice(1).map((row, idx) => {
+        const values = row.split('\t');
+        const obj = { id: idx };
+        headers.forEach((header, i) => {
+          const val = values[i];
+          if (['theoretical', 'methodological', 'cross'].includes(header)) {
+            obj[header] = parseListString(val);
+          } else if (header.includes('rao_stirling') || header === 'publication_year') {
+            obj[header] = parseFloat(val) || 0;
+          } else {
+            obj[header] = val;
+          }
+        });
+        return obj;
+      });
+    }
+
+    // Get current filter values
+    function getFilters() {
+      const componentTypes = [];
+      if (document.getElementById('cb-theoretical').checked) componentTypes.push('theoretical');
+      if (document.getElementById('cb-methodological').checked) componentTypes.push('methodological');
+      if (document.getElementById('cb-cross').checked) componentTypes.push('cross');
+      
+      return {
+        yearRange: [
+          parseInt(document.getElementById('year-min').value),
+          parseInt(document.getElementById('year-max').value)
+        ],
+        minRS: parseFloat(document.getElementById('min-rs').value),
+        topN: parseInt(document.getElementById('top-n').value),
+        componentTypes
+      };
+    }
+
+    // Build network data from processed data and filters
+    function buildNetworkData(data, filters) {
+      const { yearRange, minRS, componentTypes, topN } = filters;
+      
+      let filtered = data.filter(d => 
+        d.publication_year >= yearRange[0] && 
+        d.publication_year <= yearRange[1]
+      );
+
+      const nodeMap = new Map();
+      const edgeMap = new Map();
+      
+      componentTypes.forEach(component => {
+        const rsCol = `rao_stirling_${component}`;
+        
+        const sorted = [...filtered]
+          .filter(d => {
+            const codes = d[component];
+            const rs = component === 'cross' ? Math.abs(d[rsCol]) : d[rsCol];
+            return codes && codes.length > 0 && rs >= minRS;
+          })
+          .sort((a, b) => {
+            const rsA = component === 'cross' ? Math.abs(a[rsCol]) : a[rsCol];
+            const rsB = component === 'cross' ? Math.abs(b[rsCol]) : b[rsCol];
+            return rsB - rsA;
+          })
+          .slice(0, topN);
+
+        sorted.forEach(row => {
+          const codes = row[component];
+          const rs = component === 'cross' ? Math.abs(row[rsCol]) : row[rsCol];
+          const year = row.publication_year;
+
+          if (component === 'cross') {
+            codes.forEach(pair => {
+              if (Array.isArray(pair) && pair.length === 2) {
+                const [methCode, theoCode] = pair;
+                
+                if (!nodeMap.has(methCode)) {
+                  nodeMap.set(methCode, { id: methCode, category: 'methodological', totalRS: 0, count: 0, years: new Set() });
+                }
+                const methNode = nodeMap.get(methCode);
+                methNode.totalRS += rs;
+                methNode.count += 1;
+                methNode.years.add(year);
+
+                if (!nodeMap.has(theoCode)) {
+                  nodeMap.set(theoCode, { id: theoCode, category: 'theoretical', totalRS: 0, count: 0, years: new Set() });
+                }
+                const theoNode = nodeMap.get(theoCode);
+                theoNode.totalRS += rs;
+                theoNode.count += 1;
+                theoNode.years.add(year);
+
+                const edgeKey = [methCode, theoCode].sort().join('--');
+                if (!edgeMap.has(edgeKey)) {
+                  edgeMap.set(edgeKey, { source: methCode, target: theoCode, weight: 0, type: 'cross', count: 0 });
+                }
+                const edge = edgeMap.get(edgeKey);
+                edge.weight += rs;
+                edge.count += 1;
+              }
+            });
+          } else {
+            codes.forEach(code => {
+              if (!nodeMap.has(code)) {
+                nodeMap.set(code, { id: code, category: component, totalRS: 0, count: 0, years: new Set() });
+              }
+              const node = nodeMap.get(code);
+              node.totalRS += rs;
+              node.count += 1;
+              node.years.add(year);
+            });
+
+            for (let i = 0; i < codes.length; i++) {
+              for (let j = i + 1; j < codes.length; j++) {
+                const edgeKey = [codes[i], codes[j]].sort().join('--');
+                if (!edgeMap.has(edgeKey)) {
+                  edgeMap.set(edgeKey, { source: codes[i], target: codes[j], weight: 0, type: component, count: 0 });
+                }
+                const edge = edgeMap.get(edgeKey);
+                edge.weight += rs;
+                edge.count += 1;
+              }
+            }
+          }
+        });
+      });
+
+      const nodes = Array.from(nodeMap.values()).map(n => ({
+        ...n,
+        years: Array.from(n.years),
+        avgRS: n.totalRS / n.count
+      }));
+
+      const edges = Array.from(edgeMap.values());
+
+      return { nodes, edges };
+    }
+
+    // Render the network visualization
+    function renderNetwork(networkData) {
+      const { nodes, edges } = networkData;
+      currentNetwork = networkData;
+      
+      // Update stats
+      document.getElementById('node-count').textContent = nodes.length;
+      document.getElementById('edge-count').textContent = edges.length;
+      
+      if (nodes.length === 0) return;
+
+      const svg = d3.select('#network-svg');
+      const width = svg.node().clientWidth;
+      const height = svg.node().clientHeight;
+
+      svg.selectAll('*').remove();
+
+      const g = svg.append('g');
+
+      // Setup zoom
+      const zoom = d3.zoom()
+        .scaleExtent([0.1, 4])
+        .on('zoom', (event) => g.attr('transform', event.transform));
+
+      svg.call(zoom);
+
+      // Color scale
+      const colorScale = {
+        theoretical: '#ef5350',
+        methodological: '#42a5f5',
+        cross: '#66bb6a'
+      };
+
+      // Size scales
+      const maxCount = Math.max(...nodes.map(n => n.count));
+      const nodeSize = d3.scaleSqrt().domain([1, maxCount]).range([4, 25]);
+      
+      const maxWeight = Math.max(...edges.map(e => e.weight));
+      const edgeWidth = d3.scaleLinear().domain([0, maxWeight]).range([0.5, 4]);
+
+      // Create force simulation
+      if (simulation) simulation.stop();
+      
+      simulation = d3.forceSimulation(nodes)
+        .force('link', d3.forceLink(edges).id(d => d.id).distance(80).strength(0.3))
+        .force('charge', d3.forceManyBody().strength(-150).distanceMax(300))
+        .force('center', d3.forceCenter(width / 2, height / 2))
+        .force('collision', d3.forceCollide().radius(d => nodeSize(d.count) + 5));
+
+      // Create edges
+      const link = g.append('g')
+        .attr('class', 'links')
+        .selectAll('line')
+        .data(edges)
+        .enter()
+        .append('line')
+        .attr('stroke', d => colorScale[d.type] || '#666')
+        .attr('stroke-opacity', 0.4)
+        .attr('stroke-width', d => edgeWidth(d.weight));
+
+      // Create nodes
+      const node = g.append('g')
+        .attr('class', 'nodes')
+        .selectAll('g')
+        .data(nodes)
+        .enter()
+        .append('g')
+        .attr('class', 'node')
+        .call(d3.drag()
+          .on('start', (event, d) => {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            d.fx = d.x;
+            d.fy = d.y;
+          })
+          .on('drag', (event, d) => {
+            d.fx = event.x;
+            d.fy = event.y;
+          })
+          .on('end', (event, d) => {
+            if (!event.active) simulation.alphaTarget(0);
+            d.fx = null;
+            d.fy = null;
+          }));
+
+      // Add circles
+      node.append('circle')
+        .attr('r', d => nodeSize(d.count))
+        .attr('fill', d => colorScale[d.category])
+        .attr('stroke', '#fff')
+        .attr('stroke-width', 1.5)
+        .on('mouseover', (event, d) => showTooltip(d, event))
+        .on('mouseout', hideTooltip);
+
+      // Add labels
+      node.append('text')
+        .text(d => d.id)
+        .attr('x', d => nodeSize(d.count) + 3)
+        .attr('y', 3)
+        .attr('font-size', '10px')
+        .attr('fill', '#fff')
+        .attr('font-weight', 'bold')
+        .style('pointer-events', 'none');
+
+      // Update positions on tick
+      simulation.on('tick', () => {
+        link
+          .attr('x1', d => d.source.x)
+          .attr('y1', d => d.source.y)
+          .attr('x2', d => d.target.x)
+          .attr('y2', d => d.target.y);
+        node.attr('transform', d => `translate(${d.x},${d.y})`);
+      });
+
+      // Initial zoom
+      setTimeout(() => {
+        svg.call(zoom.transform, d3.zoomIdentity.translate(width / 4, height / 4).scale(0.8));
+      }, 100);
+    }
+
+    // Show tooltip
+    function showTooltip(d, event) {
+      const tooltip = document.getElementById('tooltip');
+      tooltip.classList.add('visible');
+      tooltip.style.left = (event.pageX + 15) + 'px';
+      tooltip.style.top = (event.pageY - 10) + 'px';
+      
+      document.getElementById('tooltip-header').textContent = d.id;
+      const catEl = document.getElementById('tooltip-category');
+      catEl.textContent = d.category;
+      catEl.className = d.category;
+      document.getElementById('tooltip-count').textContent = d.count;
+      document.getElementById('tooltip-avg-rs').textContent = d.avgRS.toFixed(4);
+      document.getElementById('tooltip-total-rs').textContent = d.totalRS.toFixed(4);
+      document.getElementById('tooltip-years').textContent = d.years.join(', ');
+    }
+
+    // Hide tooltip
+    function hideTooltip() {
+      document.getElementById('tooltip').classList.remove('visible');
+    }
+
+    // Handle file upload
+    function handleFileUpload(event) {
+      const file = event.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          rawData = processData(e.target.result);
+          
+          // Set year range based on data
+          const years = [...new Set(rawData.map(d => d.publication_year))].sort();
+          if (years.length > 0) {
+            document.getElementById('year-min').value = Math.min(...years);
+            document.getElementById('year-max').value = Math.max(...years);
+          }
+          
+          document.getElementById('upload-prompt').style.display = 'none';
+          updateNetwork();
+        };
+        reader.readAsText(file);
+      }
+    }
+
+    // Update network based on current filters
+    function updateNetwork() {
+      if (rawData.length === 0) return;
+      
+      const filters = getFilters();
+      const networkData = buildNetworkData(rawData, filters);
+      renderNetwork(networkData);
+    }
+
+    // Export network data as CSV
+    function exportCSV() {
+      const { nodes, edges } = currentNetwork;
+      
+      let csv = 'node_id,category,count,total_rs,avg_rs,years\n';
+      nodes.forEach(n => {
+        csv += `${n.id},${n.category},${n.count},${n.totalRS},${n.avgRS},"${n.years.join(';')}"\n`;
+      });
+      
+      csv += '\nsource,target,weight,type,count\n';
+      edges.forEach(e => {
+        const sourceId = e.source.id || e.source;
+        const targetId = e.target.id || e.target;
+        csv += `${sourceId},${targetId},${e.weight},${e.type},${e.count}\n`;
+      });
+      
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'network_data.csv';
+      a.click();
+    }
+
+    // Handle window resize
+    window.addEventListener('resize', () => {
+      if (rawData.length > 0) updateNetwork();
+    });
+  </script>
+</body>
+</html>
