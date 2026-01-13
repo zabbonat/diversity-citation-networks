@@ -62,9 +62,18 @@ const processData = (rawData) => {
       const obj = { ...d };
 
       // Parse list string columns
+      // Parse list string columns
       ['theoretical', 'methodological', 'cross'].forEach(col => {
         if (d[col]) {
-          obj[col] = parseListString(d[col]);
+          // Normalize JEL codes: C5 -> C50
+          const normalize = (c) => (typeof c === 'string' && /^[A-Z]\d$/.test(c)) ? c + '0' : c;
+
+          const list = parseListString(d[col]);
+          if (col === 'cross') {
+            obj[col] = list.map(pair => Array.isArray(pair) ? pair.map(normalize) : pair);
+          } else {
+            obj[col] = list.map(normalize);
+          }
         } else {
           obj[col] = [];
         }
@@ -119,7 +128,7 @@ const getEffectClass = (beta) => {
 };
 
 const buildNetworkData = (data, filters, citationWindow, quantileValue) => {
-  const { yearRange, minRS, componentTypes, topN } = filters;
+  const { yearRange, minRS_theoretical, minRS_methodological, minRS_cross, componentTypes, topN } = filters;
   const citationCol = getCitationColumn(citationWindow);
 
   let filtered = data.filter(d =>
@@ -147,6 +156,8 @@ const buildNetworkData = (data, filters, citationWindow, quantileValue) => {
 
   componentTypes.forEach(component => {
     const rsCol = `rao_stirling_${component}`;
+    // Dynamic minRS selection
+    const minRS = filters[`minRS_${component}`] || 0;
 
     const sorted = [...filtered]
       .filter(d => {
@@ -166,14 +177,15 @@ const buildNetworkData = (data, filters, citationWindow, quantileValue) => {
       const rs = component === 'cross' ? Math.abs(row[rsCol]) : row[rsCol];
       const year = row.publication_year;
       const citation = row[citationCol] || 0;
-      const beta = calculateBeta(row[rsCol]);
+      // FIX: Calculate beta using the absolute/adjusted RS value so it is positive
+      // This ensures Cross-Domain (which was negative in raw data) is treated correctly
+      const beta = calculateBeta(rs);
 
       if (component === 'cross') {
         codes.forEach(pair => {
           if (Array.isArray(pair) && pair.length === 2) {
             const [methCode, theoCode] = pair;
 
-            // Methodological node in cross context
             const methNode = getOrCreateNode(methCode, 'methodological');
             methNode.totalRS += rs;
             methNode.count += 1;
@@ -182,7 +194,6 @@ const buildNetworkData = (data, filters, citationWindow, quantileValue) => {
             methNode.years.add(year);
             methNode.citations.push(citation);
 
-            // Theoretical node in cross context
             const theoNode = getOrCreateNode(theoCode, 'theoretical');
             theoNode.totalRS += rs;
             theoNode.count += 1;
@@ -195,13 +206,14 @@ const buildNetworkData = (data, filters, citationWindow, quantileValue) => {
             if (!edgeMap.has(edgeKey)) {
               edgeMap.set(edgeKey, {
                 source: methCode, target: theoCode,
-                weight: 0, type: 'cross', count: 0, betas: []
+                weight: 0, type: 'cross', count: 0, betas: [], citations: []
               });
             }
             const edge = edgeMap.get(edgeKey);
             edge.weight += rs;
             edge.count += 1;
             edge.betas.push(beta);
+            edge.citations.push(citation);
           }
         });
       } else {
@@ -221,13 +233,14 @@ const buildNetworkData = (data, filters, citationWindow, quantileValue) => {
             if (!edgeMap.has(edgeKey)) {
               edgeMap.set(edgeKey, {
                 source: codes[i], target: codes[j],
-                weight: 0, type: component, count: 0, betas: []
+                weight: 0, type: component, count: 0, betas: [], citations: []
               });
             }
             const edge = edgeMap.get(edgeKey);
             edge.weight += rs;
             edge.count += 1;
             edge.betas.push(beta);
+            edge.citations.push(citation);
           }
         }
       }
@@ -246,7 +259,8 @@ const buildNetworkData = (data, filters, citationWindow, quantileValue) => {
 
   const edges = Array.from(edgeMap.values()).map(e => ({
     ...e,
-    avgBeta: e.betas.length > 0 ? e.betas.reduce((a, b) => a + b, 0) / e.betas.length : 0
+    avgBeta: e.betas.length > 0 ? e.betas.reduce((a, b) => a + b, 0) / e.betas.length : 0,
+    avgCitations: e.citations.length > 0 ? e.citations.reduce((a, b) => a + b, 0) / e.citations.length : 0
   }));
 
   return { nodes, edges };
@@ -403,13 +417,53 @@ const QuantileExplorer = ({
 };
 
 // ============================================================================
+// TOP COMBINATIONS MODAL
+// ============================================================================
+
+const TopCombinationsModal = ({ edges, onClose }) => {
+  const sorted = [...edges]
+    .filter(e => e.avgCitations > 0)
+    .sort((a, b) => b.avgCitations - a.avgCitations)
+    .slice(0, 5);
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" onClick={e => e.stopPropagation()}>
+        <button className="close-btn" onClick={onClose}>×</button>
+        <h2>🏆 Top 5 Combinations</h2>
+        <p className="subtitle">Ranking by Average Citations Received</p>
+
+        <div className="combinations-list">
+          {sorted.length === 0 ? (
+            <p>No combinations found for current filters.</p>
+          ) : (
+            sorted.map((edge, i) => (
+              <div key={i} className="combination-item">
+                <div className="rank">#{i + 1}</div>
+                <div className="pair-info">
+                  <strong>{edge.source.id || edge.source} ↔ {edge.target.id || edge.target}</strong>
+                  <span className={`comp-tag ${edge.type}`}>{COMPONENT_DISPLAY_NAMES[edge.type]}</span>
+                </div>
+                <div className="metric-value">
+                  {edge.avgCitations.toFixed(1)} <small>avg cit.</small>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================================
 // FILTER PANEL COMPONENT
 // ============================================================================
 
 const FilterPanel = ({
   filters, setFilters, stats, availableYears,
   citationWindow, setCitationWindow, quantileValue, setQuantileValue, currentEffect,
-  onOpenHelp
+  onOpenHelp, onOpenAnalysis
 }) => {
   const handleYearChange = (idx, value) => {
     const newRange = [...filters.yearRange];
@@ -454,6 +508,12 @@ const FilterPanel = ({
         <h3>⚙ FILTERS</h3>
 
         <div className="filter-group">
+          <button className="help-btn analysis-btn" onClick={onOpenAnalysis}>
+            🏆 Show Top 5 Combinations
+          </button>
+        </div>
+
+        <div className="filter-group">
           <label>Year Range</label>
           <div className="year-range">
             <input
@@ -493,19 +553,31 @@ const FilterPanel = ({
         </div>
 
         <div className="filter-group">
-          <label>Min Rao-Stirling: {filters.minRS.toFixed(2)}</label>
-          <input
-            type="range"
-            min="0"
-            max="0.8"
-            step="0.01"
-            value={filters.minRS}
-            onChange={(e) => setFilters({ ...filters, minRS: parseFloat(e.target.value) })}
+          <label>Min RS: Theoretical ({filters.minRS_theoretical.toFixed(2)})</label>
+          <input type="range" min="0" max="0.8" step="0.01" value={filters.minRS_theoretical}
+            onChange={(e) => setFilters({ ...filters, minRS_theoretical: parseFloat(e.target.value) })}
+            disabled={!filters.componentTypes.includes('theoretical')}
           />
         </div>
 
         <div className="filter-group">
-          <label>Top N Combinations: {filters.topN}</label>
+          <label>Min RS: Methodological ({filters.minRS_methodological.toFixed(2)})</label>
+          <input type="range" min="0" max="0.8" step="0.01" value={filters.minRS_methodological}
+            onChange={(e) => setFilters({ ...filters, minRS_methodological: parseFloat(e.target.value) })}
+            disabled={!filters.componentTypes.includes('methodological')}
+          />
+        </div>
+
+        <div className="filter-group">
+          <label>Min RS: Cross ({filters.minRS_cross.toFixed(2)})</label>
+          <input type="range" min="0" max="0.8" step="0.01" value={filters.minRS_cross}
+            onChange={(e) => setFilters({ ...filters, minRS_cross: parseFloat(e.target.value) })}
+            disabled={!filters.componentTypes.includes('cross')}
+          />
+        </div>
+
+        <div className="filter-group">
+          <label>Max Top RS Entries Analyzed: {filters.topN}</label>
           <input
             type="range"
             min="10"
@@ -744,8 +816,10 @@ const App = () => {
   const [currentEffect, setCurrentEffect] = useState(0);
 
   const [filters, setFilters] = useState({
-    yearRange: [2009, 2019],
-    minRS: 0.0,
+    yearRange: [2010, 2019],
+    minRS_theoretical: 0.0,
+    minRS_methodological: 0.0,
+    minRS_cross: 0.0,
     topN: 50,
     componentTypes: ['theoretical', 'methodological', 'cross']
   });
@@ -808,6 +882,7 @@ const App = () => {
         setQuantileValue={setQuantileValue}
         currentEffect={currentEffect}
         onOpenHelp={() => setShowHelp(true)}
+        onOpenAnalysis={() => setFilters({ ...filters, showAnalysis: true })}
       />
 
       <div className="main-content">
@@ -869,6 +944,13 @@ const App = () => {
       )}
 
       {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
+
+      {filters.showAnalysis && (
+        <TopCombinationsModal
+          edges={networkData.edges}
+          onClose={() => setFilters({ ...filters, showAnalysis: false })}
+        />
+      )}
     </div>
   );
 };
