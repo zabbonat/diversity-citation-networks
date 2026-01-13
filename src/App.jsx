@@ -130,6 +130,21 @@ const buildNetworkData = (data, filters, citationWindow, quantileValue) => {
   const nodeMap = new Map();
   const edgeMap = new Map();
 
+  const getOrCreateNode = (code, defaultCategory) => {
+    if (!nodeMap.has(code)) {
+      nodeMap.set(code, {
+        id: code,
+        category: defaultCategory,
+        totalRS: 0, count: 0,
+        rs_theoretical: 0, count_theoretical: 0,
+        rs_methodological: 0, count_methodological: 0,
+        rs_cross: 0, count_cross: 0,
+        years: new Set(), citations: []
+      });
+    }
+    return nodeMap.get(code);
+  };
+
   componentTypes.forEach(component => {
     const rsCol = `rao_stirling_${component}`;
 
@@ -158,27 +173,21 @@ const buildNetworkData = (data, filters, citationWindow, quantileValue) => {
           if (Array.isArray(pair) && pair.length === 2) {
             const [methCode, theoCode] = pair;
 
-            if (!nodeMap.has(methCode)) {
-              nodeMap.set(methCode, {
-                id: methCode, category: 'methodological',
-                totalRS: 0, count: 0, years: new Set(), citations: []
-              });
-            }
-            const methNode = nodeMap.get(methCode);
+            // Methodological node in cross context
+            const methNode = getOrCreateNode(methCode, 'methodological');
             methNode.totalRS += rs;
             methNode.count += 1;
+            methNode.rs_cross += rs;
+            methNode.count_cross += 1;
             methNode.years.add(year);
             methNode.citations.push(citation);
 
-            if (!nodeMap.has(theoCode)) {
-              nodeMap.set(theoCode, {
-                id: theoCode, category: 'theoretical',
-                totalRS: 0, count: 0, years: new Set(), citations: []
-              });
-            }
-            const theoNode = nodeMap.get(theoCode);
+            // Theoretical node in cross context
+            const theoNode = getOrCreateNode(theoCode, 'theoretical');
             theoNode.totalRS += rs;
             theoNode.count += 1;
+            theoNode.rs_cross += rs;
+            theoNode.count_cross += 1;
             theoNode.years.add(year);
             theoNode.citations.push(citation);
 
@@ -197,15 +206,11 @@ const buildNetworkData = (data, filters, citationWindow, quantileValue) => {
         });
       } else {
         codes.forEach(code => {
-          if (!nodeMap.has(code)) {
-            nodeMap.set(code, {
-              id: code, category: component,
-              totalRS: 0, count: 0, years: new Set(), citations: []
-            });
-          }
-          const node = nodeMap.get(code);
+          const node = getOrCreateNode(code, component);
           node.totalRS += rs;
           node.count += 1;
+          node[`rs_${component}`] += rs;
+          node[`count_${component}`] += 1;
           node.years.add(year);
           node.citations.push(citation);
         });
@@ -233,6 +238,9 @@ const buildNetworkData = (data, filters, citationWindow, quantileValue) => {
     ...n,
     years: Array.from(n.years),
     avgRS: n.totalRS / n.count,
+    avgRS_theoretical: n.count_theoretical ? n.rs_theoretical / n.count_theoretical : 0,
+    avgRS_methodological: n.count_methodological ? n.rs_methodological / n.count_methodological : 0,
+    avgRS_cross: n.count_cross ? n.rs_cross / n.count_cross : 0,
     citationAtQuantile: n.citations.length > 0 ? quantile(n.citations, quantileValue) : 0
   }));
 
@@ -243,6 +251,68 @@ const buildNetworkData = (data, filters, citationWindow, quantileValue) => {
 
   return { nodes, edges };
 };
+
+// ============================================================================
+// HELP MODAL COMPONENT
+// ============================================================================
+
+const HelpModal = ({ onClose }) => (
+  <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-content" onClick={e => e.stopPropagation()}>
+      <button className="close-btn" onClick={onClose}>×</button>
+      <h2>📖 How to Interpret</h2>
+
+      <div className="help-section">
+        <h3>1. Quantile Explorer (The Slider)</h3>
+        <p>The slider allows you to analyze papers based on their citation impact.</p>
+        <div className="visual-guide">
+          <div className="guide-item">
+            <span className="guide-label">τ = 0.10</span>
+            <span className="guide-desc">Focuses on ALL papers (even low cited)</span>
+          </div>
+          <div className="guide-arrow">➜ Move Right ➜</div>
+          <div className="guide-item">
+            <span className="guide-label">τ = 0.90</span>
+            <span className="guide-desc">Focuses only on TOP CITED papers</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="help-section">
+        <h3>2. Edge Colors (Beta Coefficient)</h3>
+        <p>Colors indicate whether combining two topics leads to more or fewer citations than expected.</p>
+        <ul className="color-guide">
+          <li>
+            <span className="dot-sample green"></span>
+            <strong>Green (Premium):</strong> Good combination! These topics appear together in highly cited papers.
+          </li>
+          <li>
+            <span className="dot-sample grey"></span>
+            <strong>Grey (Neutral):</strong> Standard combination. No strong positive or negative effect.
+          </li>
+          <li>
+            <span className="dot-sample red"></span>
+            <strong>Red (Penalty):</strong> Riskier combination! These topics serve a niche or are harder to publish in top journals.
+          </li>
+        </ul>
+      </div>
+
+      <div className="help-section">
+        <h3>3. Node Types</h3>
+        <ul className="node-guide">
+          <li>
+            <span className="dot-sample red-node"></span>
+            <strong>Thematic (Red):</strong> The topic/subject of the study (e.g., "Labor Economics").
+          </li>
+          <li>
+            <span className="dot-sample blue-node"></span>
+            <strong>Methodological (Blue):</strong> The tools used (e.g., "Econometrics").
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+);
 
 // ============================================================================
 // QUANTILE EXPLORER COMPONENT
@@ -256,6 +326,15 @@ const QuantileExplorer = ({
   currentEffect
 }) => {
   const effectClass = getEffectClass(currentEffect);
+  const [localQuantile, setLocalQuantile] = useState(quantileValue);
+
+  // Debounce logic
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setQuantileValue(localQuantile);
+    }, 200); // 200ms delay
+    return () => clearTimeout(timer);
+  }, [localQuantile, setQuantileValue]);
 
   return (
     <div className="filter-section quantile-explorer">
@@ -283,14 +362,14 @@ const QuantileExplorer = ({
 
       <div className="filter-group">
         <label>▶ QUANTILE SLIDER</label>
-        <div className="quantile-display">τ = {quantileValue.toFixed(2)}</div>
+        <div className="quantile-display">τ = {localQuantile.toFixed(2)}</div>
         <input
           type="range"
           min="0.10"
           max="0.90"
           step="0.01"
-          value={quantileValue}
-          onChange={(e) => setQuantileValue(parseFloat(e.target.value))}
+          value={localQuantile}
+          onChange={(e) => setLocalQuantile(parseFloat(e.target.value))}
           className="quantile-slider"
         />
         <div className="quantile-range-labels">
@@ -329,7 +408,8 @@ const QuantileExplorer = ({
 
 const FilterPanel = ({
   filters, setFilters, stats, availableYears,
-  citationWindow, setCitationWindow, quantileValue, setQuantileValue, currentEffect
+  citationWindow, setCitationWindow, quantileValue, setQuantileValue, currentEffect,
+  onOpenHelp
 }) => {
   const handleYearChange = (idx, value) => {
     const newRange = [...filters.yearRange];
@@ -347,6 +427,10 @@ const FilterPanel = ({
 
   return (
     <div className="filter-panel">
+      <button className="help-btn" onClick={onOpenHelp}>
+        📖 How to Interpret
+      </button>
+
       <div className="stats-box">
         <div className="stat">
           <span className="stat-label">Nodes</span>
@@ -502,10 +586,24 @@ const Tooltip = ({ node, position }) => {
         <span>Citation at τ:</span>
         <span>{node.citationAtQuantile?.toFixed(0) || 0}</span>
       </div>
-      <div className="tooltip-row">
-        <span>Avg RS Value:</span>
-        <span>{node.avgRS?.toFixed(4)}</span>
-      </div>
+      {node.avgRS_theoretical > 0 && (
+        <div className="tooltip-row">
+          <span>RS Thematic:</span>
+          <span>{node.avgRS_theoretical.toFixed(4)}</span>
+        </div>
+      )}
+      {node.avgRS_methodological > 0 && (
+        <div className="tooltip-row">
+          <span>RS Method.:</span>
+          <span>{node.avgRS_methodological.toFixed(4)}</span>
+        </div>
+      )}
+      {node.avgRS_cross > 0 && (
+        <div className="tooltip-row">
+          <span>RS Cross:</span>
+          <span>{node.avgRS_cross.toFixed(4)}</span>
+        </div>
+      )}
     </div>
   );
 };
@@ -637,6 +735,7 @@ const App = () => {
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
   const [selectedNode, setSelectedNode] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [showHelp, setShowHelp] = useState(false);
   const [availableYears] = useState([2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019]);
 
   // Quantile Explorer state
@@ -708,6 +807,7 @@ const App = () => {
         quantileValue={quantileValue}
         setQuantileValue={setQuantileValue}
         currentEffect={currentEffect}
+        onOpenHelp={() => setShowHelp(true)}
       />
 
       <div className="main-content">
@@ -747,12 +847,28 @@ const App = () => {
             <span>Citation at τ:</span>
             <span>{selectedNode.citationAtQuantile?.toFixed(0)}</span>
           </div>
-          <div className="detail-row">
-            <span>Average RS:</span>
-            <span>{selectedNode.avgRS?.toFixed(4)}</span>
-          </div>
+          {selectedNode.avgRS_theoretical > 0 && (
+            <div className="detail-row">
+              <span>RS Thematic:</span>
+              <span>{selectedNode.avgRS_theoretical.toFixed(4)}</span>
+            </div>
+          )}
+          {selectedNode.avgRS_methodological > 0 && (
+            <div className="detail-row">
+              <span>RS Methodological:</span>
+              <span>{selectedNode.avgRS_methodological.toFixed(4)}</span>
+            </div>
+          )}
+          {selectedNode.avgRS_cross > 0 && (
+            <div className="detail-row">
+              <span>RS Cross:</span>
+              <span>{selectedNode.avgRS_cross.toFixed(4)}</span>
+            </div>
+          )}
         </div>
       )}
+
+      {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
     </div>
   );
 };
