@@ -138,6 +138,7 @@ const buildNetworkData = (data, filters, citationWindow, quantileValue) => {
 
   const nodeMap = new Map();
   const edgeMap = new Map();
+  const combinations = [];
 
   const getOrCreateNode = (code, defaultCategory) => {
     if (!nodeMap.has(code)) {
@@ -162,23 +163,41 @@ const buildNetworkData = (data, filters, citationWindow, quantileValue) => {
     const sorted = [...filtered]
       .filter(d => {
         const codes = d[component];
-        const rs = component === 'cross' ? Math.abs(d[rsCol]) : d[rsCol];
-        return codes && codes.length > 0 && rs >= minRS;
+        const rs = d[rsCol];
+        // FIX: Filter by magnitude so negative values (penalties) are not excluded
+        return codes && codes.length > 0 && Math.abs(rs) >= minRS;
       })
       .sort((a, b) => {
-        const rsA = component === 'cross' ? Math.abs(a[rsCol]) : a[rsCol];
-        const rsB = component === 'cross' ? Math.abs(b[rsCol]) : b[rsCol];
-        return rsB - rsA;
+        const rsA = a[rsCol];
+        const rsB = b[rsCol];
+        // FIX: Sort by magnitude to rank strong negative effects correctly
+        return Math.abs(rsB) - Math.abs(rsA);
       })
       .slice(0, topN);
 
     sorted.forEach(row => {
       const codes = row[component];
-      const rs = component === 'cross' ? Math.abs(row[rsCol]) : row[rsCol];
+      const rs = row[rsCol];
       const year = row.publication_year;
       const citation = row[citationCol] || 0;
-      // FIX: Calculate beta using the absolute/adjusted RS value so it is positive
-      // This ensures Cross-Domain (which was negative in raw data) is treated correctly
+
+      // Store combination for analysis
+      if (Array.isArray(codes) && codes.length >= 2) {
+        // Flatten for cross to get all unique codes involved
+        const flatCodes = component === 'cross'
+          ? [...new Set(codes.flat())].sort()
+          : [...codes].sort();
+
+        combinations.push({
+          id: flatCodes.join('+'),
+          codes: flatCodes,
+          type: component,
+          citation: citation,
+          year: year
+        });
+      }
+
+      // FIX: Reverting to original RS value (allowing negative) as requested by user
       const beta = calculateBeta(rs);
 
       if (component === 'cross') {
@@ -257,13 +276,17 @@ const buildNetworkData = (data, filters, citationWindow, quantileValue) => {
     citationAtQuantile: n.citations.length > 0 ? quantile(n.citations, quantileValue) : 0
   }));
 
-  const edges = Array.from(edgeMap.values()).map(e => ({
-    ...e,
-    avgBeta: e.betas.length > 0 ? e.betas.reduce((a, b) => a + b, 0) / e.betas.length : 0,
-    avgCitations: e.citations.length > 0 ? e.citations.reduce((a, b) => a + b, 0) / e.citations.length : 0
-  }));
+  const edges = Array.from(edgeMap.values()).map(e => {
+    const citAtQ = e.citations.length > 0 ? quantile(e.citations, quantileValue) : 0;
+    return {
+      ...e,
+      avgBeta: e.betas.length > 0 ? e.betas.reduce((a, b) => a + b, 0) / e.betas.length : 0,
+      avgCitations: e.citations.length > 0 ? e.citations.reduce((a, b) => a + b, 0) / e.citations.length : 0,
+      citationAtQuantile: citAtQ
+    };
+  });
 
-  return { nodes, edges };
+  return { nodes, edges, combinations };
 };
 
 // ============================================================================
@@ -509,7 +532,7 @@ const FilterPanel = ({
 
         <div className="filter-group">
           <button className="help-btn analysis-btn" onClick={onOpenAnalysis}>
-            🏆 Show Top 5 Combinations
+            🏆 Show Top Clusters
           </button>
         </div>
 
@@ -799,10 +822,83 @@ const NetworkGraph = ({ nodes, edges, onNodeHover, onNodeClick }) => {
 // ============================================================================
 // MAIN APP COMPONENT
 // ============================================================================
+// TOP CLUSTERS MODAL
+// ============================================================================
+
+const TopClustersModal = ({ combinations, onClose }) => {
+  // Group by unique combination ID
+  const groups = new Map();
+
+  if (combinations) {
+    combinations.forEach(c => {
+      if (!groups.has(c.id)) {
+        groups.set(c.id, {
+          id: c.id,
+          codes: c.codes,
+          type: c.type,
+          count: 0,
+          totalCit: 0,
+          citations: []
+        });
+      }
+      const g = groups.get(c.id);
+      g.count += 1;
+      g.totalCit += c.citation;
+      g.citations.push(c.citation);
+    });
+  }
+
+  const sortedClusters = Array.from(groups.values())
+    .map(g => ({
+      ...g,
+      avgCit: g.count > 0 ? g.totalCit / g.count : 0
+    }))
+    .sort((a, b) => b.avgCit - a.avgCit)
+    .slice(0, 10); // Show Top 10
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" onClick={e => e.stopPropagation()}>
+        <button className="close-btn" onClick={onClose}>×</button>
+        <h2>🏆 Top Combinations (Itemsets)</h2>
+        <p className="subtitle">Ranking by Average Citations of Co-occurring Codes</p>
+
+        <div className="combinations-list">
+          {sortedClusters.length === 0 ? (
+            <p>No combinations found for current filters.</p>
+          ) : (
+            sortedClusters.map((cluster, i) => (
+              <div key={i} className="combination-item" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', marginBottom: '8px' }}>
+                  <div className="rank">#{i + 1}</div>
+                  <div className="metric-value">
+                    {cluster.avgCit.toFixed(1)} <small>avg cit.</small>
+                    <span style={{ fontSize: '0.8em', color: '#666', marginLeft: '8px' }}>
+                      (freq: {cluster.count})
+                    </span>
+                  </div>
+                </div>
+                <div className="cluster-edges" style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+                  {cluster.codes.map((code, j) => (
+                    <span key={j} className={`badge ${cluster.type}`} style={{ fontSize: '0.9em' }}>
+                      {code}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================================
 
 const App = () => {
   const [processedData, setProcessedData] = useState([]);
-  const [networkData, setNetworkData] = useState({ nodes: [], edges: [] });
+  const [networkData, setNetworkData] = useState({ nodes: [], edges: [], combinations: [] });
   const [hoveredNode, setHoveredNode] = useState(null);
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
   const [selectedNode, setSelectedNode] = useState(null);
@@ -850,13 +946,34 @@ const App = () => {
       const network = buildNetworkData(processedData, filters, citationWindow, quantileValue);
       setNetworkData(network);
 
-      // Calculate current effect (average beta across all edges)
+      // Calculate current effect (weighted average beta by citation count at quantile)
       if (network.edges.length > 0) {
-        const avgBeta = network.edges.reduce((sum, e) => sum + e.avgBeta, 0) / network.edges.length;
+        // Weighted average: Sum(Beta * Citations) / Sum(Citations)
+        // If total citations is 0, fallback to simple average
+        let totalWeightedBeta = 0;
+        let totalWeight = 0;
+
+        network.edges.forEach(e => {
+          const weight = e.citationAtQuantile || 1; // Use 1 as minimum weight to avoid zero div if all are 0
+          totalWeightedBeta += e.avgBeta * weight;
+          totalWeight += weight;
+        });
+
+        const avgBeta = totalWeight > 0 ? totalWeightedBeta / totalWeight : 0;
         setCurrentEffect(avgBeta);
       }
     }
   }, [processedData, filters, citationWindow, quantileValue]);
+
+  // Sync selectedNode with networkData updates
+  useEffect(() => {
+    if (selectedNode && networkData.nodes.length > 0) {
+      const updated = networkData.nodes.find(n => n.id === selectedNode.id);
+      if (updated && updated !== selectedNode) {
+        setSelectedNode(updated);
+      }
+    }
+  }, [networkData, selectedNode]);
 
 
 
@@ -946,8 +1063,8 @@ const App = () => {
       {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
 
       {filters.showAnalysis && (
-        <TopCombinationsModal
-          edges={networkData.edges}
+        <TopClustersModal
+          combinations={networkData.combinations}
           onClose={() => setFilters({ ...filters, showAnalysis: false })}
         />
       )}
