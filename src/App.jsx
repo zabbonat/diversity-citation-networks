@@ -20,11 +20,27 @@ const parseJELXml = async () => {
       const code = cls.querySelector(':scope > code')?.textContent;
       const desc = cls.querySelector(':scope > description')?.textContent;
       if (code && desc) {
-        // Clean up HTML entities
-        JEL_DESCRIPTIONS[code] = desc
+        let cleanDesc = desc
           .replace(/&bull;/g, '•')
           .replace(/&ndash;/g, '–')
           .replace(/&amp;/g, '&');
+
+        // Fix for "General" descriptions: use parent category description if available
+        if (cleanDesc.trim() === 'General') {
+          const parent = cls.parentNode;
+          if (parent && parent.nodeName === 'classification') {
+            const parentDesc = parent.querySelector(':scope > description')?.textContent;
+            if (parentDesc) {
+              cleanDesc = parentDesc
+                .replace(/&bull;/g, '•')
+                .replace(/&ndash;/g, '–')
+                .replace(/&amp;/g, '&');
+              // Optional: cleanDesc += ' (General)'; // User seems to prefer just the category name
+            }
+          }
+        }
+
+        JEL_DESCRIPTIONS[code] = cleanDesc;
       }
     });
   } catch (e) {
@@ -316,20 +332,20 @@ const HelpModal = ({ onClose }) => (
       </div>
 
       <div className="help-section">
-        <h3>2. Edge Colors (Beta Coefficient)</h3>
-        <p>Colors indicate whether combining two topics leads to more or fewer citations than expected.</p>
+        <h3>2. Effect Analysis (Edge Colors)</h3>
+        <p>The <strong>colored lines</strong> connecting topics show the effect of their combination:</p>
         <ul className="color-guide">
           <li>
             <span className="dot-sample green"></span>
-            <strong>Green (Premium):</strong> Good combination! These topics appear together in highly cited papers.
+            <strong>Green (Positive):</strong> Helpful. Combining these topics usually leads to MORE citations.
           </li>
           <li>
             <span className="dot-sample grey"></span>
-            <strong>Grey (Neutral):</strong> Standard combination. No strong positive or negative effect.
+            <strong>Grey (Neutral):</strong> Neutral. No significant advantage or disadvantage.
           </li>
           <li>
             <span className="dot-sample red"></span>
-            <strong>Red (Penalty):</strong> Riskier combination! These topics serve a niche or are harder to publish in top journals.
+            <strong>Red (Negative):</strong> Difficult. Combining these topics tends to result in FEWER citations (penalty).
           </li>
         </ul>
       </div>
@@ -871,12 +887,6 @@ const TopClustersModal = ({ combinations, onClose }) => {
               <div key={i} className="combination-item" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', marginBottom: '8px' }}>
                   <div className="rank">#{i + 1}</div>
-                  <div className="metric-value">
-                    {cluster.avgCit.toFixed(1)} <small>avg cit.</small>
-                    <span style={{ fontSize: '0.8em', color: '#666', marginLeft: '8px' }}>
-                      (freq: {cluster.count})
-                    </span>
-                  </div>
                 </div>
                 <div className="cluster-edges" style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
                   {cluster.codes.map((code, j) => (
